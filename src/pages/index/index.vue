@@ -65,16 +65,56 @@ export default {
     scanISBN() {
       uni.scanCode({
         scanType: ['barCode'],
+        onlyFromCamera: false,
         success: (res) => {
-          console.log('扫码结果：', res.result);
-          // 处理扫码结果，可以跳转到书籍详情页或直接开始对话
-          this.startChat(`我想了解ISBN为${res.result}的书籍`);
+          console.log('条码类型：' + res.scanType);
+          console.log('条码内容：' + res.result);
+          
+          if (res.result && (res.result.length === 10 || res.result.length === 13)) {
+            this.startChat(`我想了解ISBN为${res.result}的书籍`);
+          } else {
+            uni.showToast({
+              title: '无效的ISBN码，请重新扫描',
+              icon: 'none',
+              duration: 2000
+            });
+          }
+        },
+        fail: (err) => {
+          console.error('扫码失败:', err);
+          uni.showToast({
+            title: '扫码失败，请重试',
+            icon: 'none',
+            duration: 2000
+          });
+        },
+        complete: () => {
+          console.log('扫码操作完成');
         }
       });
     },
     manualInput() {
-      uni.navigateTo({
-        url: '/pages/book-input/book-input'
+      // 弹出输入框让用户输入ISBN
+      uni.showModal({
+        title: '手动输入ISBN',
+        placeholderText: '请输入13位ISBN码',
+        editable: true,
+        success: (res) => {
+          if (res.confirm && res.content) {
+            // 验证ISBN格式（简单验证，可以扩展为更复杂的验证）
+            if (res.content.length === 13 || res.content.length === 10) {
+              // 开始与输入的ISBN对应的书籍对话
+              this.startChat(`我想了解ISBN为${res.content}的书籍`);
+            } else {
+              // ISBN格式不正确，提示用户
+              uni.showToast({
+                title: 'ISBN格式不正确，请输入10位或13位ISBN',
+                icon: 'none',
+                duration: 2000
+              });
+            }
+          }
+        }
       });
     },
     sendMessage() {
@@ -164,13 +204,14 @@ export default {
   width: 100%;
   margin-top: 20rpx;
   margin-bottom: 40rpx;
+  gap: 24rpx;
 }
 
 .feature-item {
-  width: 48%;
+  flex: 1;
   background-color: #FFFFFF;
   border-radius: 20rpx;
-  padding: 20rpx;
+  padding: 24rpx 15rpx;
   box-shadow: 0 2rpx 6rpx rgba(0, 0, 0, 0.12);
   display: flex;
   flex-direction: column;
@@ -195,15 +236,16 @@ export default {
   justify-content: space-between;
   width: 100%;
   margin-top: 30rpx;
+  gap: 24rpx;
 }
 
 .action-button {
-  width: 48%;
+  flex: 1;
   background-color: #5D5FEF;
   color: white;
   border: none;
   border-radius: 20rpx;
-  padding: 20rpx 10rpx;
+  padding: 24rpx 15rpx;
   margin-bottom: 10rpx;
   display: flex;
   flex-direction: column;
@@ -220,11 +262,11 @@ export default {
   font-size: 28rpx;
   font-weight: bold;
   margin-bottom: 5rpx;
-  margin-top: 5rpx;
+  margin-top: 10rpx;
 }
 
 .action-button-description {
-  font-size: 22rpx;
+  font-size: 24rpx;
   opacity: 0.9;
 }
 
