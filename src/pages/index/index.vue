@@ -1,7 +1,8 @@
 <template>
   <view class="app-container">
     <view class="chat-container">
-      <view class="welcome-container">
+      <!-- 欢迎界面 - 根据状态控制显示 -->
+      <view class="welcome-container" v-if="!bookSelected" :style="{ opacity: welcomeOpacity }">
         <image class="welcome-icon" src="/static/logo.png"></image>
         <text class="welcome-title">欢迎使用书智对谈</text>
         <text class="welcome-text">扫描书籍ISBN码或手动输入，开启与书本的智能对话。从此阅读不再枯燥，让AI为你解读书中精彩。</text>
@@ -33,6 +34,24 @@
         </view>
       </view>
       
+      <!-- 书籍信息栏 - 当选中书籍时显示 -->
+      <view class="book-info-container" v-if="bookSelected" :style="{ opacity: bookInfoOpacity }">
+        <view class="book-info-content">
+          <image class="book-cover" :src="currentBook.coverUrl || '/static/default-book.png'"></image>
+          <view class="book-details">
+            <text class="book-title">{{currentBook.title}}</text>
+            <text class="book-author">作者：{{currentBook.author}}</text>
+            <text class="book-publisher">出版社：{{currentBook.publisher}}</text>
+            <text class="book-intro-label">简介：</text>
+            <text class="book-intro">{{currentBook.introduction}}</text>
+          </view>
+        </view>
+        <button class="cancel-button" @click="cancelBookChat">
+          <text>退出与本书对话</text>
+        </button>
+      </view>
+      
+      <!-- 聊天消息 -->
       <view v-for="(item, index) in messages" :key="index" 
             class="message" :class="item.type === 'user' ? 'message-user' : 'message-bot'">
         {{ item.content }}
@@ -58,7 +77,18 @@ export default {
     return {
       welcomeVisible: true,
       inputMessage: '',
-      messages: []
+      messages: [],
+      bookSelected: false,
+      welcomeOpacity: 1,
+      bookInfoOpacity: 0,
+      currentBook: {
+        isbn: '',
+        title: '',
+        author: '',
+        publisher: '',
+        introduction: '',
+        coverUrl: ''
+      }
     }
   },
   methods: {
@@ -71,7 +101,8 @@ export default {
           console.log('条码内容：' + res.result);
           
           if (res.result && (res.result.length === 10 || res.result.length === 13)) {
-            this.startChat(`我想了解ISBN为${res.result}的书籍`);
+            // 模拟获取书籍数据，实际应用中应该调用API获取
+            this.fetchBookInfo(res.result);
           } else {
             uni.showToast({
               title: '无效的ISBN码，请重新扫描',
@@ -103,8 +134,8 @@ export default {
           if (res.confirm && res.content) {
             // 验证ISBN格式（简单验证，可以扩展为更复杂的验证）
             if (res.content.length === 13 || res.content.length === 10) {
-              // 开始与输入的ISBN对应的书籍对话
-              this.startChat(`我想了解ISBN为${res.content}的书籍`);
+              // 获取书籍信息
+              this.fetchBookInfo(res.content);
             } else {
               // ISBN格式不正确，提示用户
               uni.showToast({
@@ -130,14 +161,11 @@ export default {
       const userMessage = this.inputMessage;
       this.inputMessage = '';
       
-      // 隐藏欢迎界面
-      this.welcomeVisible = false;
-      
       // 模拟机器人回复
       setTimeout(() => {
         this.messages.push({
           type: 'bot',
-          content: '我正在分析这本书的内容，请稍等...'
+          content: '我正在分析《' + this.currentBook.title + '》的内容，请稍等...'
         });
         
         // 这里应该有实际的API请求来获取回复
@@ -147,6 +175,69 @@ export default {
     startChat(message) {
       this.inputMessage = message;
       this.sendMessage();
+    },
+    // 获取书籍信息 - 模拟API调用
+    fetchBookInfo(isbn) {
+      // 显示加载中
+      uni.showLoading({
+        title: '获取书籍信息...'
+      });
+      
+      // 这里应该是实际的API调用，这里使用模拟数据
+      setTimeout(() => {
+        // 模拟书籍数据
+        this.currentBook = {
+          isbn: isbn,
+          title: 'JavaScript高级编程（第4版）',
+          author: '马特·弗里斯比',
+          publisher: '人民邮电出版社',
+          introduction: '《JavaScript高级程序设计》是JavaScript经典图书，新版涵盖ECMAScript 2019，全面介绍JavaScript基础与最佳实践。',
+          coverUrl: 'https://img3.doubanio.com/view/subject/s/public/s33561554.jpg'
+        };
+        
+        // 隐藏加载
+        uni.hideLoading();
+        
+        // 转换界面 - 添加淡入淡出效果
+        this.switchToBookMode();
+      }, 1500);
+    },
+    // 切换到书籍对话模式
+    switchToBookMode() {
+      // 先将欢迎界面淡出
+      this.welcomeOpacity = 0;
+      
+      setTimeout(() => {
+        this.bookSelected = true;
+        
+        // 将书籍信息淡入
+        setTimeout(() => {
+          this.bookInfoOpacity = 1;
+          
+          // 添加一条系统消息
+          this.messages = [{
+            type: 'bot',
+            content: `你好，我是《${this.currentBook.title}》的智能助手，请问有什么可以帮助你的吗？`
+          }];
+        }, 100);
+      }, 300);
+    },
+    // 取消书籍对话
+    cancelBookChat() {
+      // 先将书籍信息淡出
+      this.bookInfoOpacity = 0;
+      
+      setTimeout(() => {
+        this.bookSelected = false;
+        
+        // 清除对话记录
+        this.messages = [];
+        
+        // 将欢迎界面淡入
+        setTimeout(() => {
+          this.welcomeOpacity = 1;
+        }, 100);
+      }, 300);
     }
   }
 }
@@ -176,6 +267,7 @@ export default {
   justify-content: center;
   text-align: center;
   padding: 30rpx;
+  transition: opacity 0.3s ease;
 }
 
 .welcome-icon {
@@ -268,6 +360,85 @@ export default {
 .action-button-description {
   font-size: 24rpx;
   opacity: 0.9;
+}
+
+/* 书籍信息样式 */
+.book-info-container {
+  width: 100%;
+  background-color: #FFFFFF;
+  border-radius: 20rpx;
+  padding: 20rpx;
+  margin-bottom: 20rpx;
+  box-shadow: 0 2rpx 10rpx rgba(0, 0, 0, 0.1);
+  transition: opacity 0.3s ease;
+}
+
+.book-info-content {
+  display: flex;
+  flex-direction: row;
+  align-items: flex-start;
+}
+
+.book-cover {
+  width: 180rpx;
+  height: 240rpx;
+  border-radius: 8rpx;
+  box-shadow: 0 2rpx 6rpx rgba(0, 0, 0, 0.1);
+  margin-right: 20rpx;
+}
+
+.book-details {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+}
+
+.book-title {
+  font-size: 32rpx;
+  font-weight: bold;
+  color: #1A1A2E;
+  margin-bottom: 10rpx;
+}
+
+.book-author {
+  font-size: 26rpx;
+  color: #4A4A6A;
+  margin-bottom: 8rpx;
+}
+
+.book-publisher {
+  font-size: 26rpx;
+  color: #4A4A6A;
+  margin-bottom: 8rpx;
+}
+
+.book-intro-label {
+  font-size: 26rpx;
+  font-weight: bold;
+  color: #4A4A6A;
+  margin-top: 10rpx;
+}
+
+.book-intro {
+  font-size: 24rpx;
+  color: #4A4A6A;
+  line-height: 1.5;
+  margin-top: 4rpx;
+}
+
+.cancel-button {
+  width: 100%;
+  background-color: #F5F5F5;
+  color: #5D5FEF;
+  border: 1px solid #5D5FEF;
+  border-radius: 40rpx;
+  padding: 12rpx 0;
+  margin-top: 20rpx;
+  font-size: 26rpx;
+}
+
+.cancel-button:active {
+  background-color: #EAEAEA;
 }
 
 .message {
