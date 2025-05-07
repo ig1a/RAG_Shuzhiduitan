@@ -1,448 +1,201 @@
-# 书智对谈 API 接口文档
+<!--
+# 变更记录
+- 2025-05-06 新建 API 文档，添加登录、书籍信息、对话及预留用户功能接口说明
+-->
 
-**文件修改记录**：
-- 初始API文档创建，包含书籍信息查询和智能对话功能
+# 书智对谈小程序后端 API 文档
+
+> 后端框架：Django 4.x + Django REST Framework (DRF)
+> 
+> 大模型：DeepSeek R1，通过 OpenAI Python SDK 调用（兼容 OpenAI 接口）。
+> 
+> 通信格式：JSON；流式对话采用 `text/event-stream`（SSE）或 `application/x-ndjson`。
+
+---
 
 ## 目录
+1. 认证模块
+2. 书籍模块
+3. 对话模块（流式）
+4. 用户模块（预留）
+5. 错误码
+6. 后端开发注意事项（Dev Notes）
 
-- [1. 简介](#1-简介)
-- [2. 通用约定](#2-通用约定)
-- [3. 认证方式](#3-认证方式)
-- [4. API 接口](#4-api-接口)
-  - [4.1 书籍识别](#41-书籍识别)
-  - [4.2 智能对话](#42-智能对话)
-- [5. 数据模型](#5-数据模型)
-- [6. 错误码](#6-错误码)
+---
 
-## 1. 简介
+## 1. 认证模块
 
-本文档详细描述了"书智对谈"微信小程序的后端API接口，供前端开发人员和后端开发人员参考。API基于RESTful设计原则，使用Django框架实现。
+### 1.1 微信登录
+- **URL**：`POST /api/auth/login/wechat/`
+- **说明**：前端获取到 `wx.login` 返回的 `code` 后调用此接口换取 `JWT`。游客禁止访问，其余接口需携带 `Authorization: Bearer <token>`。
 
-## 2. 通用约定
+| 参数 | 类型 | 必填 | 说明 |
+|------|------|------|------|
+| code | string | 是 | `wx.login` 获取的临时登录凭证 |
 
-- 所有API请求均使用HTTPS协议
-- 请求和响应数据均使用JSON格式
-- API的基础URL为: `https://api.example.com/v1`（实际地址需替换）
-- 所有时间格式采用ISO 8601标准: `YYYY-MM-DDTHH:MM:SSZ`
-- 分页参数统一使用: `page`（页码，从1开始）和`page_size`（每页条目数）
-
-## 3. 认证方式
-
-API使用微信小程序登录态作为认证方式：
-
-1. 前端通过微信登录API获取登录凭证（code）
-2. 前端将code传给后端
-3. 后端调用微信接口获取openid和session_key
-4. 后端生成自定义登录态token返回给前端
-5. 前端后续请求通过HTTP头部中的Authorization字段携带token
-
-**请求示例：**
-
-```
-Authorization: Bearer eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJvcGVuaWQiOiJvUE...
-```
-
-## 4. API 接口
-
-### 4.1 书籍识别
-
-#### 4.1.1 通过ISBN获取书籍信息
-
-**接口描述：** 根据ISBN码获取书籍详细信息，包括书名、作者、出版社、封面和简介等
-
-**请求方法：** GET
-
-**请求URL：** `/books/isbn/{isbn}`
-
-**路径参数：**
-
-| 参数名 | 类型   | 是否必须 | 描述       |
-| ------ | ------ | -------- | ---------- |
-| isbn   | string | 是       | 书籍ISBN码 |
-
-**响应参数：**
-
-| 参数名       | 类型   | 描述         |
-| ------------ | ------ | ------------ |
-| isbn         | string | 书籍ISBN码   |
-| title        | string | 书籍标题     |
-| author       | string | 作者         |
-| publisher    | string | 出版社       |
-| publish_date | string | 出版日期     |
-| cover_url    | string | 封面图片URL  |
-| introduction | string | 书籍简介     |
-| tags         | array  | 标签列表     |
-| price        | string | 价格         |
-| success      | boolean | 请求是否成功 |
-| error_code   | integer | 错误码，成功时为0 |
-| error_msg    | string  | 错误信息，成功时为空 |
-
-**响应示例：**
-
+#### 请求示例
 ```json
 {
-  "isbn": "9787115546081",
-  "title": "JavaScript高级编程（第4版）",
+  "code": "033z2dDx1K2LhE0yXKCx1DdHnK2z2dDx"
+}
+```
+
+#### 成功响应 `200`
+```json
+{
+  "token": "<jwt_token>",
+  "expires_in": 7200,
+  "user": {
+    "id": 1,
+    "nickname": "阿书",
+    "avatar_url": "https://example.com/avatar.jpg"
+  }
+}
+```
+
+---
+
+## 2. 书籍模块
+
+### 2.1 获取书籍信息
+- **URL**：`GET /api/books/{isbn}/`
+- **说明**：后端先查内部缓存，未命中则抓取第三方公开源（如豆瓣 / OpenLibrary），并入库缓存。
+- **权限**：需要登录
+
+| 路径参数 | 类型 | 说明 |
+|-----------|------|------|
+| isbn | string | 10 位或 13 位 ISBN |
+
+#### 成功响应 `200`
+```json
+{
+  "isbn": "9787115549449",
+  "title": "JavaScript 高级程序设计（第4版）",
   "author": "马特·弗里斯比",
   "publisher": "人民邮电出版社",
-  "publish_date": "2020-04-01",
-  "cover_url": "https://img3.doubanio.com/view/subject/s/public/s33561554.jpg",
-  "introduction": "《JavaScript高级程序设计》是JavaScript经典图书，新版涵盖ECMAScript 2019，全面介绍JavaScript基础与最佳实践。",
-  "tags": ["编程", "JavaScript", "前端开发"],
-  "price": "129.00",
-  "success": true,
-  "error_code": 0,
-  "error_msg": ""
+  "introduction": "……",
+  "cover_url": "https://img3.doubanio.com/view/subject/s/public/s33561554.jpg"
 }
 ```
 
-**错误响应示例：**
+---
 
+## 3. 对话模块（流式）
+
+### 3.1 发起/继续与书籍的 AI 对话（SSE 流式）
+- **URL**：`POST /api/chat/stream/`
+- **Headers**：
+  - `Authorization: Bearer <token>`
+  - `Accept: text/event-stream`
+- **说明**：客户端传入当前上下文消息列表，服务端调用 DeepSeek R1（OpenAI SDK）并以流式事件返回。
+
+| 字段 | 类型 | 必填 | 说明 |
+|------|------|------|------|
+| isbn | string | 是 | 当前对话关联的书籍 ISBN |
+| messages | array | 是 | 消息数组，结构同 OpenAI `messages` 字段 |
+
+#### 请求示例
 ```json
 {
-  "success": false,
-  "error_code": 1001,
-  "error_msg": "无效的ISBN码"
-}
-```
-
-#### 4.1.2 通过书名搜索书籍
-
-**接口描述：** 根据书名关键词搜索相关书籍
-
-**请求方法：** GET
-
-**请求URL：** `/books/search`
-
-**查询参数：**
-
-| 参数名    | 类型   | 是否必须 | 描述                 |
-| --------- | ------ | -------- | -------------------- |
-| keyword   | string | 是       | 搜索关键词           |
-| page      | integer | 否       | 页码，默认为1        |
-| page_size | integer | 否       | 每页条目数，默认为10 |
-
-**响应参数：**
-
-| 参数名       | 类型    | 描述               |
-| ------------ | ------- | ------------------ |
-| total        | integer | 总条目数           |
-| total_pages  | integer | 总页数             |
-| current_page | integer | 当前页码           |
-| books        | array   | 书籍列表           |
-| success      | boolean | 请求是否成功       |
-| error_code   | integer | 错误码，成功时为0  |
-| error_msg    | string  | 错误信息，成功时为空 |
-
-**books数组中每个元素的结构：**
-
-| 参数名       | 类型   | 描述         |
-| ------------ | ------ | ------------ |
-| isbn         | string | 书籍ISBN码   |
-| title        | string | 书籍标题     |
-| author       | string | 作者         |
-| publisher    | string | 出版社       |
-| cover_url    | string | 封面图片URL  |
-| introduction | string | 书籍简介(摘要) |
-
-**响应示例：**
-
-```json
-{
-  "total": 25,
-  "total_pages": 3,
-  "current_page": 1,
-  "books": [
-    {
-      "isbn": "9787115546081",
-      "title": "JavaScript高级编程（第4版）",
-      "author": "马特·弗里斯比",
-      "publisher": "人民邮电出版社",
-      "cover_url": "https://img3.doubanio.com/view/subject/s/public/s33561554.jpg",
-      "introduction": "《JavaScript高级程序设计》是JavaScript经典图书，新版涵盖ECMAScript 2019..."
-    },
-    // 更多书籍...
-  ],
-  "success": true,
-  "error_code": 0,
-  "error_msg": ""
-}
-```
-
-### 4.2 智能对话
-
-#### 4.2.1 开始与书籍对话
-
-**接口描述：** 初始化与指定书籍的对话，返回AI的开场白
-
-**请求方法：** POST
-
-**请求URL：** `/chat/start`
-
-**请求参数：**
-
-| 参数名 | 类型   | 是否必须 | 描述       |
-| ------ | ------ | -------- | ---------- |
-| isbn   | string | 是       | 书籍ISBN码 |
-
-**响应参数：**
-
-| 参数名       | 类型    | 描述              |
-| ------------ | ------- | ----------------- |
-| chat_id      | string  | 对话会话ID        |
-| book_info    | object  | 书籍基本信息      |
-| message      | string  | AI的开场白        |
-| success      | boolean | 请求是否成功      |
-| error_code   | integer | 错误码，成功时为0 |
-| error_msg    | string  | 错误信息，成功时为空 |
-
-**book_info对象结构：**
-
-| 参数名       | 类型   | 描述         |
-| ------------ | ------ | ------------ |
-| isbn         | string | 书籍ISBN码   |
-| title        | string | 书籍标题     |
-| author       | string | 作者         |
-| publisher    | string | 出版社       |
-| cover_url    | string | 封面图片URL  |
-
-**响应示例：**
-
-```json
-{
-  "chat_id": "c123456789",
-  "book_info": {
-    "isbn": "9787115546081",
-    "title": "JavaScript高级编程（第4版）",
-    "author": "马特·弗里斯比",
-    "publisher": "人民邮电出版社",
-    "cover_url": "https://img3.doubanio.com/view/subject/s/public/s33561554.jpg"
-  },
-  "message": "你好，我是《JavaScript高级编程（第4版）》的智能助手，请问有什么可以帮助你的吗？",
-  "success": true,
-  "error_code": 0,
-  "error_msg": ""
-}
-```
-
-#### 4.2.2 发送消息
-
-**接口描述：** 向AI发送消息，获取AI响应
-
-**请求方法：** POST
-
-**请求URL：** `/chat/message`
-
-**请求参数：**
-
-| 参数名   | 类型   | 是否必须 | 描述           |
-| -------- | ------ | -------- | -------------- |
-| chat_id  | string | 是       | 对话会话ID     |
-| message  | string | 是       | 用户发送的消息 |
-
-**响应参数：**
-
-| 参数名       | 类型    | 描述               |
-| ------------ | ------- | ------------------ |
-| message_id   | string  | 消息ID             |
-| content      | string  | AI回复的消息内容   |
-| created_at   | string  | 消息创建时间       |
-| success      | boolean | 请求是否成功       |
-| error_code   | integer | 错误码，成功时为0  |
-| error_msg    | string  | 错误信息，成功时为空 |
-
-**响应示例：**
-
-```json
-{
-  "message_id": "m987654321",
-  "content": "在JavaScript中，变量声明有三种方式：var、let和const。其中，let和const是ES6新增的块级作用域声明方式，解决了var的一些问题，例如变量提升和全局作用域污染。let声明的变量值可以修改，而const声明的是常量，其值不可重新赋值。",
-  "created_at": "2025-05-04T12:42:15Z",
-  "success": true,
-  "error_code": 0,
-  "error_msg": ""
-}
-```
-
-#### 4.2.3 获取对话历史
-
-**接口描述：** 获取与指定书籍的对话历史记录
-
-**请求方法：** GET
-
-**请求URL：** `/chat/history/{chat_id}`
-
-**路径参数：**
-
-| 参数名  | 类型   | 是否必须 | 描述       |
-| ------- | ------ | -------- | ---------- |
-| chat_id | string | 是       | 对话会话ID |
-
-**查询参数：**
-
-| 参数名    | 类型   | 是否必须 | 描述                 |
-| --------- | ------ | -------- | -------------------- |
-| page      | integer | 否       | 页码，默认为1        |
-| page_size | integer | 否       | 每页条目数，默认为20 |
-
-**响应参数：**
-
-| 参数名       | 类型    | 描述               |
-| ------------ | ------- | ------------------ |
-| chat_id      | string  | 对话会话ID         |
-| book_info    | object  | 书籍基本信息       |
-| messages     | array   | 消息记录列表       |
-| total        | integer | 消息总数           |
-| total_pages  | integer | 总页数             |
-| current_page | integer | 当前页码           |
-| success      | boolean | 请求是否成功       |
-| error_code   | integer | 错误码，成功时为0  |
-| error_msg    | string  | 错误信息，成功时为空 |
-
-**book_info对象结构：**
-
-| 参数名       | 类型   | 描述         |
-| ------------ | ------ | ------------ |
-| isbn         | string | 书籍ISBN码   |
-| title        | string | 书籍标题     |
-| author       | string | 作者         |
-| publisher    | string | 出版社       |
-| cover_url    | string | 封面图片URL  |
-
-**messages数组中每个元素的结构：**
-
-| 参数名     | 类型   | 描述         |
-| ---------- | ------ | ------------ |
-| message_id | string | 消息ID       |
-| sender     | string | 发送者类型：'user'或'bot' |
-| content    | string | 消息内容     |
-| created_at | string | 消息创建时间 |
-
-**响应示例：**
-
-```json
-{
-  "chat_id": "c123456789",
-  "book_info": {
-    "isbn": "9787115546081",
-    "title": "JavaScript高级编程（第4版）",
-    "author": "马特·弗里斯比",
-    "publisher": "人民邮电出版社",
-    "cover_url": "https://img3.doubanio.com/view/subject/s/public/s33561554.jpg"
-  },
+  "isbn": "9787115549449",
   "messages": [
-    {
-      "message_id": "m123456781",
-      "sender": "bot",
-      "content": "你好，我是《JavaScript高级编程（第4版）》的智能助手，请问有什么可以帮助你的吗？",
-      "created_at": "2025-05-04T12:40:10Z"
-    },
-    {
-      "message_id": "m123456782",
-      "sender": "user",
-      "content": "JavaScript中var、let和const有什么区别？",
-      "created_at": "2025-05-04T12:41:05Z"
-    },
-    {
-      "message_id": "m123456783",
-      "sender": "bot",
-      "content": "在JavaScript中，变量声明有三种方式：var、let和const。其中，let和const是ES6新增的块级作用域声明方式，解决了var的一些问题，例如变量提升和全局作用域污染。let声明的变量值可以修改，而const声明的是常量，其值不可重新赋值。",
-      "created_at": "2025-05-04T12:41:15Z"
-    }
-  ],
-  "total": 3,
-  "total_pages": 1,
-  "current_page": 1,
-  "success": true,
-  "error_code": 0,
-  "error_msg": ""
+    { "role": "user", "content": "这本书的作者是谁？" }
+  ]
 }
 ```
 
-#### 4.2.4 结束对话
+#### 流式响应示例（`text/event-stream`）
+```
+data: {"id":"chatcmpl-123","choices":[{"delta":{"role":"assistant","content":"《JavaScript 高级程序设计》的作者是"}}]}
 
-**接口描述：** 结束与指定书籍的对话会话
+data: {"choices":[{"delta":{"content":"马特·弗里斯比。"}}]}
 
-**请求方法：** POST
+data: [DONE]
+```
+前端监听 `onMessage`，逐段拼接显示。
 
-**请求URL：** `/chat/end`
+---
 
-**请求参数：**
+## 4. 用户模块（预留接口，仅列出占位）
 
-| 参数名  | 类型   | 是否必须 | 描述       |
-| ------- | ------ | -------- | ---------- |
-| chat_id | string | 是       | 对话会话ID |
+| 功能 | Method & URL | 说明 |
+|------|--------------|------|
+| 获取阅读历史 | `GET /api/user/history/` | 列出用户最近的对话/书籍记录 |
+| 删除历史记录 | `DELETE /api/user/history/{id}/` | |
+| 书籍收藏列表 | `GET /api/user/collections/` | |
+| 收藏/取消收藏 | `POST /api/user/collections/` / `DELETE /api/user/collections/{isbn}/` | |
+| 个人信息 | `GET /api/user/profile/` | |
+| 更新个人信息 | `PUT /api/user/profile/` | |
 
-**响应参数：**
+> 以上接口暂未在前端实现，但已预留 URL 及资源设计，后期可直接对接。
 
-| 参数名     | 类型    | 描述               |
-| ---------- | ------- | ------------------ |
-| success    | boolean | 请求是否成功       |
-| error_code | integer | 错误码，成功时为0  |
-| error_msg  | string  | 错误信息，成功时为空 |
+---
 
-**响应示例：**
+## 5. 全局错误码
 
+| HTTP Status | code | message | 说明 |
+|-------------|------|---------|------|
+| 400 | `INVALID_PARAMS` | 参数校验失败 |
+| 401 | `UNAUTHORIZED` | 未登录或 Token 失效 |
+| 404 | `NOT_FOUND` | 资源不存在 |
+| 429 | `RATE_LIMIT` | 触发频率限制 |
+| 500 | `SERVER_ERROR` | 服务器错误 |
+| 503 | `MODEL_ERROR` | 调用大模型失败 |
+
+---
+
+### 示例错误响应
 ```json
 {
-  "success": true,
-  "error_code": 0,
-  "error_msg": ""
+  "code": "UNAUTHORIZED",
+  "message": "请先登录"
 }
 ```
 
-## 5. 数据模型
+---
 
-以下是API相关的主要数据模型设计：
+### 接口约定
+1. 所有成功响应使用 HTTP `200`，业务错误通过 `code` 字段区分。
+2. 时间字段统一使用 ISO 8601 字符串。
+3. 分页采用 `limit` / `offset` 查询参数；响应返回 `count`、`next`、`previous`。
+4. 长任务（如模型推理）可返回 `202 Accepted` + 任务 ID，客户端轮询。当前对话接口采用流式返回，可忽略此机制。
 
-### 5.1 Book（书籍）
+---
 
-| 字段名       | 类型        | 描述         |
-| ------------ | ----------- | ------------ |
-| isbn         | CharField   | 书籍ISBN码，主键 |
-| title        | CharField   | 书籍标题     |
-| author       | CharField   | 作者         |
-| publisher    | CharField   | 出版社       |
-| publish_date | DateField   | 出版日期     |
-| cover_url    | URLField    | 封面图片URL  |
-| introduction | TextField   | 书籍简介     |
-| tags         | ManyToMany  | 标签列表     |
-| price        | DecimalField| 价格         |
-| created_at   | DateTimeField | 创建时间   |
-| updated_at   | DateTimeField | 更新时间   |
+## 6. 后端开发注意事项（Dev Notes）
 
-### 5.2 ChatSession（对话会话）
+1. 鉴权 & 中间件
+   - 使用 `django-rest-framework-simplejwt`，AccessToken 2h，RefreshToken 7d；将匿名访问全局禁用。
+   - 在 `settings.py` 配置 `REST_FRAMEWORK['DEFAULT_AUTHENTICATION_CLASSES']` 为 JWT。
+   - 对 SSE 视图要关闭 `CsrfViewMiddleware`，改用自定义 `JWTAuthentication`。
 
-| 字段名     | 类型          | 描述       |
-| ---------- | ------------- | ---------- |
-| id         | UUIDField     | 会话ID，主键 |
-| user       | ForeignKey    | 用户引用   |
-| book       | ForeignKey    | 书籍引用   |
-| is_active  | BooleanField  | 是否活跃   |
-| created_at | DateTimeField | 创建时间   |
-| updated_at | DateTimeField | 更新时间   |
+2. CORS
+   - 小程序请求域名已备案：`https://sealos.plumeintel.tech`。
+   - 安装 `django-cors-headers`，允许 `*.weixin.qq.com` 及正式域名。
 
-### 5.3 Message（消息）
+3. 速率限制
+   - 推荐 `django-ratelimit`，对 `/api/chat/stream/` 做 IP + user 限流，例如 60 次/分钟。
 
-| 字段名      | 类型          | 描述       |
-| ----------- | ------------- | ---------- |
-| id          | UUIDField     | 消息ID，主键 |
-| chat_session| ForeignKey    | 会话引用   |
-| sender_type | CharField     | 发送者类型：'user'或'bot' |
-| content     | TextField     | 消息内容   |
-| created_at  | DateTimeField | 创建时间   |
+4. 书籍抓取与缓存
+   - 抓取顺序：自库 → 豆瓣 API → OpenLibrary；若全失败返回 404。
+   - 建议使用 `Celery + Redis` 异步抓取，接口先返回 202，前端轮询；本文档中直接同步返回。
+   - 书籍信息缓存 30 天；封面图 URL 建议代理至自有 OSS 以规避防盗链。
 
-## 6. 错误码
+5. SSE 实现
+   - 视图需 `@gzip_page` **禁用**，避免 Django 自动压缩。
+   - 使用 `StreamingHttpResponse`，`content_type='text/event-stream'`，并在每块数据后加 `\n\n`。
+   - 若部署 Nginx，设置 `proxy_buffering off;` 以免缓存流。
 
-| 错误码 | 描述           | HTTP状态码 |
-| ------ | -------------- | ---------- |
-| 0      | 成功           | 200        |
-| 1000   | 系统内部错误   | 500        |
-| 1001   | 参数错误       | 400        |
-| 1002   | 资源不存在     | 404        |
-| 1003   | 认证失败       | 401        |
-| 1004   | 权限不足       | 403        |
-| 2001   | 书籍不存在     | 404        |
-| 2002   | ISBN格式无效   | 400        |
-| 3001   | 会话不存在     | 404        |
-| 3002   | 会话已结束     | 400        |
+6. 大模型调用
+   - DeepSeek R1 API 与 OpenAI 兼容，使用 `openai==1.3+`。
+   - 流式参数：`stream=True`；每次 yield 的 `chunk.choices[0].delta.content` 直接写入 SSE。
+   - 建议在服务端追加 `user_id` 入 `openai.ChatCompletion.create(..., user=user.id)`，便于审计。
+
+7. 日志与监控
+   - 使用 `django-structlog` 输出 JSON 日志；敏感信息（token、prompts）应脱敏。
+   - 接入 `Prometheus` 监控接口 QPS、延迟、token 消耗。
+
+8. 部署
+   - 生产环境：Python 3.11 + Gunicorn + Uvicorn Worker；SSE 需要 `--worker-connections 1000`。
+   - 若使用容器，记得开放 `--add-host host.docker.internal:host-gateway` 供模型服务访问。
+

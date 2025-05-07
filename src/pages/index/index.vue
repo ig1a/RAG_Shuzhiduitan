@@ -54,7 +54,8 @@
       <!-- 聊天消息 -->
       <view v-for="(item, index) in messages" :key="index" 
             class="message" :class="item.type === 'user' ? 'message-user' : 'message-bot'">
-        {{ item.content }}
+        <rich-text v-if="item.type === 'bot'" :nodes="formatMessage(item.content)"></rich-text>
+        <text v-else>{{ item.content }}</text>
       </view>
     </view>
 
@@ -72,6 +73,15 @@
 </template>
 
 <script>
+// 功能变更记录
+// 2025-05-06 接入后端 API，替换前端模拟数据与对话
+// 2025-05-06 优化聊天逻辑，增加调试日志和错误处理
+// 2025-05-06 修复聊天内容显示问题，确保正确接收并展示流式内容
+// 2025-05-06 优化消息显示，支持富文本展示和简单 Markdown 格式
+// 2025-05-06 修复真机上的堆栈溢出错误
+// 2025-05-06 修复 Int8Array 与二进制数据处理相关错误
+import { getBook } from '@/services/book.js'
+import { streamChat } from '@/services/chat.js'
 export default {
   data() {
     return {
@@ -88,10 +98,38 @@ export default {
         publisher: '',
         introduction: '',
         coverUrl: ''
-      }
+      },
+      sseTask: null // 新增：SSE 请求任务引用
     }
   },
   methods: {
+    // 格式化消息内容，支持简单的富文本
+    formatMessage(content) {
+      if (!content) return '';
+      
+      // 机器人思考中状态显示加载动画
+      if (content === '正在思考...') {
+        return `<span style="color:#777;">${content}</span>`;
+      }
+      
+      // 转义特殊字符
+      let formatted = String(content)
+        .replace(/&/g, '&amp;')
+        .replace(/</g, '&lt;')
+        .replace(/>/g, '&gt;');
+      
+      // 简单的 Markdown 转换
+      // 粗体
+      formatted = formatted.replace(/\*\*(.*?)\*\*/g, '<strong>$1</strong>');
+      // 斜体
+      formatted = formatted.replace(/\*(.*?)\*/g, '<em>$1</em>');
+      // 代码
+      formatted = formatted.replace(/`(.*?)`/g, '<code style="background:#f1f1f1;padding:2px 4px;border-radius:3px;">$1</code>');
+      // 换行
+      formatted = formatted.replace(/\n/g, '<br/>');
+      
+      return formatted;
+    },
     scanISBN() {
       uni.scanCode({
         scanType: ['barCode'],
@@ -101,7 +139,7 @@ export default {
           console.log('条码内容：' + res.result);
           
           if (res.result && (res.result.length === 10 || res.result.length === 13)) {
-            // 模拟获取书籍数据，实际应用中应该调用API获取
+            // 调用后端获取书籍数据
             this.fetchBookInfo(res.result);
           } else {
             uni.showToast({
@@ -134,7 +172,7 @@ export default {
           if (res.confirm && res.content) {
             // 验证ISBN格式（简单验证，可以扩展为更复杂的验证）
             if (res.content.length === 13 || res.content.length === 10) {
-              // 获取书籍信息
+              // 调用后端获取书籍信息
               this.fetchBookInfo(res.content);
             } else {
               // ISBN格式不正确，提示用户
@@ -157,50 +195,133 @@ export default {
         content: this.inputMessage
       });
       
-      // 清空输入框
-      const userMessage = this.inputMessage;
+      // 机器人占位消息 - 先显示"正在思考..."
+      const botMsg = { 
+        type: 'bot', 
+        content: '正在思考...' 
+      };
+      this.messages.push(botMsg);
+
+      // 备份并清空输入
+      const userInput = this.inputMessage;
       this.inputMessage = '';
       
-      // 模拟机器人回复
-      setTimeout(() => {
-        this.messages.push({
-          type: 'bot',
-          content: '我正在分析《' + this.currentBook.title + '》的内容，请稍等...'
-        });
-        
-        // 这里应该有实际的API请求来获取回复
-        // 实际应用中应该调用后端API
-      }, 1000);
+      // 打印调试信息
+      console.log('发送消息:', userInput);
+      console.log('当前书籍:', this.currentBook);
+
+      // 构造 OpenAI 消息上下文 - 只发送最近记录避免过长
+      const recentMessages = this.messages
+        .slice(0, this.messages.length - 1) // 去掉"正在思考..."占位符
+        .slice(-10) // 只取最近10条
+        .map(m => ({
+          role: m.type === 'user' ? 'user' : 'assistant',
+          content: m.content
+        }));
+      
+      console.log('发送上下文:', recentMessages);
+
+      // 调用后端流式接口
+      this.sseTask = streamChat({
+        isbn: this.currentBook.isbn,
+        messages: recentMessages,
+        onMessage: (json) => {
+          // 调试日志 - 检查 JSON 结构
+          console.log('原始收到内容:', 
+            typeof json === 'object' ? JSON.stringify(json).substring(0, 100) : json);
+          
+          // 清除"正在思考..."
+          if (botMsg.content === '正在思考...') {
+            botMsg.content = '';
+          }
+          
+          // 提取增量内容
+          let deltaText = '';
+          
+          // 匹配不同格式返回
+          if (json.choices && json.choices.length > 0) {
+            const choice = json.choices[0];
+            
+            // 增量格式 delta.content
+            if (choice.delta && choice.delta.content !== undefined) {
+              deltaText = choice.delta.content;
+            }
+            // 非增量格式 text 或 content
+            else if (choice.text) {
+              deltaText = choice.text;
+            } else if (choice.content) {
+              deltaText = choice.content;
+            } else if (typeof choice === 'string') {
+              deltaText = choice;
+            }
+            
+            // 如果有 content 属性 
+            if (choice.content && typeof choice.content === 'string') {
+              deltaText = choice.content;
+            }
+          } else if (json.content) {
+            // 直接返回内容格式
+            deltaText = json.content;
+          } else if (typeof json === 'string') {
+            // 纯文本
+            deltaText = json;
+          }
+          
+          // 如果能提取到文本，则追加到消息中
+          if (deltaText) {
+            console.log(`追加文本: "${deltaText}"`);
+            // 通过 Vue 的响应式 set 确保视图更新
+            botMsg.content += deltaText;
+            // 仅更新视图，不做自动滚动（避免堆栈溢出）
+            this.$forceUpdate();
+          } else {
+            console.warn('无法从响应提取文本内容:', json);
+          }
+        },
+        onError: (err) => {
+          console.error('对话失败:', err);
+          // 如果还是"正在思考"，则替换为错误提示
+          if (botMsg.content === '正在思考...') {
+            botMsg.content = '对话失败，请稍后重试。';
+          } else {
+            // 追加错误提示
+            botMsg.content += '\n\n[对话中断，请稍后重试]';
+          }
+          uni.showToast({ title: '对话失败', icon: 'none' });
+        },
+        onComplete: () => {
+          console.log('对话完成');
+          // 如果最终内容仍为正在思考，说明没有接收到任何内容
+          if (botMsg.content === '正在思考...') {
+            botMsg.content = '抱歉，未能获取到回复内容。';
+          }
+          this.sseTask = null;
+        }
+      });
     },
     startChat(message) {
       this.inputMessage = message;
       this.sendMessage();
     },
-    // 获取书籍信息 - 模拟API调用
-    fetchBookInfo(isbn) {
-      // 显示加载中
-      uni.showLoading({
-        title: '获取书籍信息...'
-      });
-      
-      // 这里应该是实际的API调用，这里使用模拟数据
-      setTimeout(() => {
-        // 模拟书籍数据
+    // 获取书籍信息
+    async fetchBookInfo(isbn) {
+      uni.showLoading({ title: '获取书籍信息...' });
+      try {
+        const data = await getBook(isbn);
         this.currentBook = {
-          isbn: isbn,
-          title: 'JavaScript高级编程（第4版）',
-          author: '马特·弗里斯比',
-          publisher: '人民邮电出版社',
-          introduction: '《JavaScript高级程序设计》是JavaScript经典图书，新版涵盖ECMAScript 2019，全面介绍JavaScript基础与最佳实践。',
-          coverUrl: 'https://img3.doubanio.com/view/subject/s/public/s33561554.jpg'
+          isbn: data.isbn,
+          title: data.title,
+          author: data.author,
+          publisher: data.publisher,
+          introduction: data.introduction,
+          coverUrl: data.cover_url
         };
-        
-        // 隐藏加载
         uni.hideLoading();
-        
-        // 转换界面 - 添加淡入淡出效果
         this.switchToBookMode();
-      }, 1500);
+      } catch (e) {
+        uni.hideLoading();
+        uni.showToast({ title: '获取书籍失败', icon: 'none' });
+      }
     },
     // 切换到书籍对话模式
     switchToBookMode() {
@@ -224,6 +345,7 @@ export default {
     },
     // 取消书籍对话
     cancelBookChat() {
+      if (this.sseTask && this.sseTask.abort) this.sseTask.abort();
       // 先将书籍信息淡出
       this.bookInfoOpacity = 0;
       
@@ -238,7 +360,17 @@ export default {
           this.welcomeOpacity = 1;
         }, 100);
       }, 300);
-    }
+    },
+    // 滚动到聊天底部 - 简化版本，避免循环引用
+    scrollToBottom() {
+      // 使用简单的滚动逻辑
+      setTimeout(() => {
+        uni.pageScrollTo({
+          scrollTop: 9999,
+          duration: 100
+        });
+      }, 200);
+    },
   }
 }
 </script>
